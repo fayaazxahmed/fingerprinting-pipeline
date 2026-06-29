@@ -1,3 +1,5 @@
 .venv
 .venv-1
+*.pkl
+*.ubj
 Datasets
