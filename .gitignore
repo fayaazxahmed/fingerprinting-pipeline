@@ -4,3 +4,4 @@
 *.ubj
 Datasets
 docker_setup/Captures
+docker_setup/scripts
