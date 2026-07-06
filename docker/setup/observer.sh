@@ -1,10 +1,23 @@
 #!/bin/bash
+
+# Get the bridge interface name from the network ID
+BRIDGE_ID=$(docker network inspect iot-sim-net --format '{{.Id}}' | cut -c1-12)
+BRIDGE_IFACE="br-${BRIDGE_ID}"
+
+echo "Bridge interface: $BRIDGE_IFACE"
+
 docker run -d \
   --name observer \
-  --network iot-sim-net \
-  --ip 192.168.10.100 \
+  --net=host \
   --cap-add NET_ADMIN \
+  --cap-add NET_RAW \
+  -e BRIDGE_IFACE="$BRIDGE_IFACE" \
   -v $(pwd)/captures:/captures \
   -v $(pwd)/extractor/extractor.py:/app/extractor.py \
-  python:3.11-slim \
-  bash -c "pip install scapy -q && python /app/extractor.py"
+  nicolaka/netshoot \
+  bash -c "
+    ip link set $BRIDGE_IFACE promisc on &&
+    apk add python3 py3-pip -q &&
+    pip install scapy --break-system-packages -q &&
+    python3 /app/extractor.py $BRIDGE_IFACE
+  "
