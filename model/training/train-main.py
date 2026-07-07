@@ -222,6 +222,8 @@ importance_df = feature_cutoffs(features)
 print("\nHash consistency across two rounds of training:")
 hash_consistency(model, X_test)
 
+'''
 model.save_model("xgb_classifier.ubj")
 joblib.dump(le, "label_encoder.pkl")
 joblib.dump(X.columns.tolist(), "feature_columns.pkl")
+'''

@@ -28,6 +28,13 @@ FIELDS = [
     "network_ports_dst_count",
 ]
 
+# Initialize CSV with header columns for each feature
+def initialize_csv():
+    os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
+    with open(OUTPUT, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(FIELDS)
+
 # Per-device state buffers
 buffers = defaultdict(lambda: {
     "packets_all":      [],
@@ -91,9 +98,6 @@ def flush(ts):
 
     with open(OUTPUT, "a", newline="") as f:
         writer = csv.writer(f)
-        if write_header:
-            writer.writerow(FIELDS)
-            f.flush()
 
         rows_written = 0
         for src_ip, b in buffers.items():
@@ -187,6 +191,7 @@ def handle_packet(pkt):
 # Main
 if __name__ == "__main__":
     os.makedirs("/captures", exist_ok=True)
+    initialize_csv()
 
     sys.stdout = os.fdopen(sys.stdout.fileno(), "w", buffering=1)
 
