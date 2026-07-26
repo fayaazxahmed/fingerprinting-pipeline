@@ -19,6 +19,7 @@ docker run -d \
   -e BRIDGE_IFACE="$BRIDGE_IFACE" \
   -v "$PROJECT_ROOT/captures:/captures" \
   -v "$PROJECT_ROOT/extractor/extractor.py:/app/extractor.py" \
+  -v "$PROJECT_ROOT/log_util.py:/app/log_util.py" \
   nicolaka/netshoot \
   bash -c "
     ip link set $BRIDGE_IFACE promisc on &&
