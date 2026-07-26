@@ -1,0 +1,6 @@
+device,total_rows,attack_rows,benign_rows,dominant_label,consistency,mean_confidence,unique_hashes
+192.168.10.11,104,0,104,benign,1.0,0.8329,4
+192.168.10.12,104,0,104,benign,1.0,0.8447,3
+192.168.10.20,104,0,104,benign,1.0,0.6899,4
+192.168.10.21,104,0,104,benign,1.0,0.9391,3
+192.168.10.50,104,0,104,benign,1.0,0.5637,6
