@@ -131,6 +131,7 @@ def initialize_csv():
     with open(OUTPUT, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(FIELDS)
+        f.flush()
 
 
 # ── Per-device state buffers ──────────────────────────────────────────────────

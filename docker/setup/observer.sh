@@ -3,7 +3,6 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# Get the bridge interface name from the network ID
 BRIDGE_ID=$(docker network inspect iot-sim-net --format '{{.Id}}' | cut -c1-12)
 BRIDGE_IFACE="br-${BRIDGE_ID}"
 
@@ -13,10 +12,9 @@ docker rm -f observer 2>/dev/null || true
 
 docker run -d \
   --name observer \
-  --network iot-sim-net \
+  --network host \
   --cap-add NET_ADMIN \
   --cap-add NET_RAW \
-  -e BRIDGE_IFACE="$BRIDGE_IFACE" \
   -v "$PROJECT_ROOT/captures:/captures" \
   -v "$PROJECT_ROOT/extractor/extractor.py:/app/extractor.py" \
   -v "$PROJECT_ROOT/log_util.py:/app/log_util.py" \
