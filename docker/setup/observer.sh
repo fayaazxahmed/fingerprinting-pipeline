@@ -13,7 +13,7 @@ docker rm -f observer 2>/dev/null || true
 
 docker run -d \
   --name observer \
-  --net=host \
+  --network iot-sim-net \
   --cap-add NET_ADMIN \
   --cap-add NET_RAW \
   -e BRIDGE_IFACE="$BRIDGE_IFACE" \
