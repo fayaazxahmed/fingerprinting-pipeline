@@ -3,6 +3,7 @@ import time
 import hashlib
 import logging
 import joblib
+import docker
 import numpy as np
 import pandas as pd
 from collections import defaultdict
@@ -19,7 +20,7 @@ FEATURES_PATH = os.path.join(_MODEL_DIR, "feature_columns.pkl")
 DEVICE_COL = "src_ip"          # Column in extractor CSV that identifies devices
 POLL_INTERVAL = 1.0               # Seconds between file change checks
 FLUSH_TIMEOUT = 60.0              # Seconds to wait before giving up on a flush
-FLUSHES_PER_DEVICE = 20                # Optimal number of flushes to collect per device
+FLUSHES_PER_DEVICE = 5                # Optimal number of flushes to collect per device
 TOP_N_CLASSES = 3                 # Top N classes shown per fingerprint
 OUTPUT_PATH = "fingerprint_results.csv"
 
@@ -271,6 +272,37 @@ def collect_traffic(path, current_state, n_devices, flushes_per_device=FLUSHES_P
         f"across {flush_count} flushes")
     return combined
 
+# Map IP address to docker container name
+def get_container_name_map():
+    """
+    Queries the Docker API and returns a dict mapping each
+    container's IP address to its name.
+    
+    Returns:
+        dict: { '192.168.10.21': 'my_container_name', ... }
+    """
+    try:
+        client     = docker.from_env()
+        containers = client.containers.list()
+        ip_to_name = {}
+
+        for container in containers:
+            networks = container.attrs['NetworkSettings']['Networks']
+            for network in networks.values():
+                ip = network.get('IPAddress')
+                if ip:
+                    # Strip leading slash from container name
+                    name = container.name.lstrip('/')
+                    ip_to_name[ip] = name
+
+        log(f"Docker API resolved {len(ip_to_name)} container IP mappings")
+        return ip_to_name
+
+    except Exception as e:
+        log(f"WARNING: Could not query Docker API — {e}")
+        log("Container names will not be included in summary.")
+        return {}
+
 # Prepare and summarize output data
 def prepare_features(df, feature_columns, drop_cols=None):
     if drop_cols is None:
@@ -295,38 +327,46 @@ def summarize_by_device(df_meta, fingerprint_df):
          fingerprint_df.reset_index(drop=True)],
         axis=1
     )
- 
+
     if DEVICE_COL not in combined.columns:
         log("No device column in output — skipping per-device summary.")
         return combined, pd.DataFrame()
- 
+
+    # Resolve container names from Docker API
+    ip_to_name = get_container_name_map()
+
     summaries = []
     for device, group in combined.groupby(DEVICE_COL):
         dominant_label = group['predicted_label'].mode()[0]
         consistency    = (group['predicted_label'] == dominant_label).mean()
- 
+
+        # Look up container name, fall back to IP if not found
+        container_name = ip_to_name.get(device, 'unknown')
+
         summaries.append({
-            'device':          device,
-            'total_rows':      len(group),
-            'attack_rows':     int(group['is_attack'].sum()),
-            'benign_rows':     int((~group['is_attack']).sum()),
-            'dominant_label':  dominant_label,
-            'consistency':     round(consistency, 4),
-            'mean_confidence': round(group['confidence'].mean(), 4),
-            'unique_hashes':   group['fingerprint_hash'].nunique()
+            'device':           device,
+            'container_name':   container_name,
+            'total_rows':       len(group),
+            'attack_rows':      int(group['is_attack'].sum()),
+            'benign_rows':      int((~group['is_attack']).sum()),
+            'dominant_label':   dominant_label,
+            'consistency':      round(consistency, 4),
+            'mean_confidence':  round(group['confidence'].mean(), 4),
+            'unique_hashes':    group['fingerprint_hash'].nunique()
         })
- 
+
     summary_df = pd.DataFrame(summaries)
- 
+
     log("\n── Per-Device Summary " + "─" * 40)
     for _, row in summary_df.iterrows():
         flag = "ATTACK DETECTED" if row['attack_rows'] > 0 else "Benign"
         log(
-            f"  {str(row['device']):<20} | {flag:<18} | "
+            f"  {str(row['container_name']):<25} ({str(row['device']):<15}) | "
+            f"{flag:<18} | "
             f"Consistency: {row['consistency']:.0%} | "
             f"Confidence: {row['mean_confidence']:.4f} | "
             f"Unique hashes: {row['unique_hashes']}"
         )
     log("─" * 62 + "\n")
- 
+
     return combined, summary_df
