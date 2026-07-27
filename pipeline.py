@@ -370,3 +370,324 @@ def summarize_by_device(df_meta, fingerprint_df):
     log("─" * 62 + "\n")
 
     return combined, summary_df
+
+def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=15, output_path="device_fingerprints.png"):
+    import matplotlib
+    matplotlib.use("Agg")  # non-interactive backend for server environments
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+    import seaborn as sns
+    import numpy as np
+ 
+    # ── Palette and style ─────────────────────────────────────────────────────
+    # Dark terminal-style theme reflecting network monitoring context
+    plt.rcParams.update({
+        "figure.facecolor":  "#0d1117",
+        "axes.facecolor":    "#161b22",
+        "axes.edgecolor":    "#30363d",
+        "axes.labelcolor":   "#c9d1d9",
+        "axes.titlecolor":   "#f0f6fc",
+        "xtick.color":       "#8b949e",
+        "ytick.color":       "#8b949e",
+        "text.color":        "#c9d1d9",
+        "grid.color":        "#21262d",
+        "grid.linestyle":    "--",
+        "grid.alpha":        0.5,
+        "font.family":       "monospace",
+    })
+ 
+    ACCENT_BENIGN  = "#3fb950"   # green  — benign traffic
+    ACCENT_ATTACK  = "#f85149"   # red    — attack traffic
+    ACCENT_NEUTRAL = "#58a6ff"   # blue   — feature bars
+    ACCENT_WARN    = "#d29922"   # amber  — low confidence
+ 
+    # ── Get global feature importance for reference ranking ───────────────────
+    importance_dict  = model.get_booster().get_score(importance_type='gain')
+    feature_names    = X.columns.tolist()
+ 
+    # Rank features by global importance so bars are ordered meaningfully
+    ranked_features = sorted(
+        [f for f in feature_names if f in importance_dict],
+        key=lambda f: importance_dict.get(f, 0),
+        reverse=True
+    )[:top_n_features]
+ 
+    # ── Combine meta and fingerprint data ─────────────────────────────────────
+    combined = pd.concat(
+        [df_meta.reset_index(drop=True),
+         fingerprint_df.reset_index(drop=True),
+         X.reset_index(drop=True)],
+        axis=1
+    )
+ 
+    devices     = combined[DEVICE_COL].dropna().unique().tolist()
+    n_devices   = len(devices)
+ 
+    if n_devices == 0:
+        log("No devices found for plotting.")
+        return
+ 
+    # ── Layout — one row per device, three panels per row ────────────────────
+    # Panel 1: feature value bar chart
+    # Panel 2: class probability distribution
+    # Panel 3: confidence + consistency gauges
+    fig = plt.figure(figsize=(22, 6 * n_devices), facecolor="#0d1117")
+    fig.suptitle(
+        "Device Network Fingerprint Analysis",
+        fontsize=16, fontweight="bold", color="#f0f6fc",
+        y=1.01 if n_devices > 1 else 1.04
+    )
+ 
+    outer = gridspec.GridSpec(
+        n_devices, 1, figure=fig,
+        hspace=0.55
+    )
+ 
+    for dev_idx, device in enumerate(devices):
+        dev_rows   = combined[combined[DEVICE_COL] == device]
+        dev_X      = dev_rows[ranked_features].mean()  # mean feature values across all rows
+ 
+        # Fingerprint stats for this device
+        dominant_label  = dev_rows['predicted_label'].mode()[0]
+        consistency     = (dev_rows['predicted_label'] == dominant_label).mean()
+        mean_confidence = dev_rows['confidence'].mean()
+        is_attack       = dev_rows['is_attack'].any()
+        n_rows          = len(dev_rows)
+        unique_hashes   = dev_rows['fingerprint_hash'].nunique()
+ 
+        # Mean probability vector across all rows for this device
+        prob_vectors    = np.array(dev_rows['prob_vector'].tolist())
+        mean_probs      = prob_vectors.mean(axis=0)
+ 
+        # Container name if available
+        container_name  = dev_rows['container_name'].iloc[0] \
+            if 'container_name' in dev_rows.columns else device
+ 
+        # Colour for this device based on attack status
+        device_colour   = ACCENT_ATTACK if is_attack else ACCENT_BENIGN
+ 
+        # ── Inner grid: 3 panels ──────────────────────────────────────────────
+        inner = gridspec.GridSpecFromSubplotSpec(
+            1, 3, subplot_spec=outer[dev_idx],
+            width_ratios=[2.5, 2, 1],
+            wspace=0.35
+        )
+ 
+        # ── Device header label ───────────────────────────────────────────────
+        header = f"{'⚠ ' if is_attack else '✓ '}{container_name}  ({device})"
+        fig.add_subplot(outer[dev_idx]).set_visible(False)
+        ax_header = fig.add_axes(
+            [outer[dev_idx].get_position(fig).x0,
+             outer[dev_idx].get_position(fig).y1,
+             outer[dev_idx].get_position(fig).width, 0.0]
+        )
+        ax_header.set_visible(False)
+ 
+        # Panel title drawn on Panel 1 as a row header
+        ax1 = fig.add_subplot(inner[0])
+        ax1.set_title(
+            f"{'⚠  ' if is_attack else '✓  '}{container_name}   "
+            f"({device})   ·   {n_rows} windows   ·   "
+            f"{unique_hashes} unique fingerprints",
+            loc="left", fontsize=10, fontweight="bold",
+            color=device_colour, pad=10
+        )
+ 
+        # ── Panel 1: Feature values (mean across windows) ─────────────────────
+        feature_vals  = [dev_X.get(f, 0) for f in ranked_features]
+        feature_labels = [f.replace("network_", "").replace("log_", "log/")
+                          for f in ranked_features]
+ 
+        # Normalise bar lengths to [0, 1] for visual comparability
+        max_val       = max(feature_vals) if max(feature_vals) > 0 else 1
+        norm_vals     = [v / max_val for v in feature_vals]
+ 
+        # Colour bars by global importance rank — brighter = more important
+        bar_alphas    = [1.0 - (i / top_n_features) * 0.55
+                         for i in range(len(ranked_features))]
+        bar_colours   = [(*matplotlib.colors.to_rgb(ACCENT_NEUTRAL), a)
+                         for a in bar_alphas]
+ 
+        bars = ax1.barh(
+            range(len(ranked_features)),
+            norm_vals,
+            color=bar_colours,
+            height=0.65,
+            edgecolor="none"
+        )
+ 
+        # Annotate bars with actual values
+        for bar, val in zip(bars, feature_vals):
+            ax1.text(
+                bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2,
+                f"{val:.2f}", va="center", ha="left",
+                fontsize=7, color="#8b949e"
+            )
+ 
+        ax1.set_yticks(range(len(ranked_features)))
+        ax1.set_yticklabels(feature_labels, fontsize=8)
+        ax1.set_xlabel("Normalised value  (raw value annotated)", fontsize=8)
+        ax1.set_xlim(0, 1.25)
+        ax1.invert_yaxis()
+        ax1.grid(axis="x")
+        ax1.set_ylabel("Feature  (top by global importance)", fontsize=8)
+ 
+        # Importance rank markers on y axis
+        for i, feat in enumerate(ranked_features):
+            rank = list(importance_dict.keys()).index(feat) + 1 \
+                if feat in importance_dict else "—"
+            ax1.text(
+                -0.02, i, f"#{rank}",
+                va="center", ha="right",
+                fontsize=7, color="#8b949e",
+                transform=ax1.get_yaxis_transform()
+            )
+ 
+        # ── Panel 2: Class probability distribution ───────────────────────────
+        ax2 = fig.add_subplot(inner[1])
+ 
+        # Only show classes with meaningful probability (> 1%)
+        class_names  = list(fingerprint_df.attrs.get(
+            'class_names', [f"class_{i}" for i in range(len(mean_probs))]
+        ))
+ 
+        # Get class names from the top_classes field if available
+        sample_top   = dev_rows['top_classes'].iloc[0]
+        if isinstance(sample_top, dict):
+            all_classes  = list(sample_top.keys())
+        else:
+            import ast
+            all_classes  = list(ast.literal_eval(sample_top).keys())
+ 
+        # Aggregate mean probability per class across all rows for this device
+        top_class_probs = {}
+        for _, row in dev_rows.iterrows():
+            tc = row['top_classes'] if isinstance(row['top_classes'], dict) \
+                else ast.literal_eval(row['top_classes'])
+            for cls, prob in tc.items():
+                top_class_probs[cls] = top_class_probs.get(cls, 0) + prob
+ 
+        total_weight = sum(top_class_probs.values())
+        top_class_probs = {
+            k: v / total_weight
+            for k, v in sorted(
+                top_class_probs.items(), key=lambda x: x[1], reverse=True
+            )
+        }
+ 
+        cls_labels = list(top_class_probs.keys())
+        cls_vals   = list(top_class_probs.values())
+ 
+        cls_colours = []
+        for cls in cls_labels:
+            if cls.lower() == "benign":
+                cls_colours.append(ACCENT_BENIGN)
+            else:
+                cls_colours.append(ACCENT_ATTACK)
+ 
+        ax2.barh(
+            range(len(cls_labels)),
+            cls_vals,
+            color=cls_colours,
+            height=0.6,
+            edgecolor="none",
+            alpha=0.85
+        )
+ 
+        for i, val in enumerate(cls_vals):
+            ax2.text(
+                val + 0.005, i,
+                f"{val:.1%}", va="center", ha="left",
+                fontsize=8, color="#c9d1d9"
+            )
+ 
+        ax2.set_yticks(range(len(cls_labels)))
+        ax2.set_yticklabels(cls_labels, fontsize=8)
+        ax2.set_xlabel("Mean probability across windows", fontsize=8)
+        ax2.set_xlim(0, 1.2)
+        ax2.invert_yaxis()
+        ax2.grid(axis="x")
+        ax2.set_title("Class probability distribution", fontsize=9,
+                       color="#8b949e", pad=6)
+ 
+        # ── Panel 3: Confidence and consistency gauges ────────────────────────
+        ax3 = fig.add_subplot(inner[2])
+        ax3.set_xlim(0, 1)
+        ax3.set_ylim(0, 1)
+        ax3.axis("off")
+ 
+        def draw_gauge(ax, x, y, value, label, colour, width=0.35, height=0.06):
+            """Draws a simple horizontal gauge bar with label and value."""
+            # Background track
+            ax.add_patch(plt.Rectangle(
+                (x, y), width, height,
+                facecolor="#21262d", edgecolor="#30363d",
+                linewidth=0.8, transform=ax.transAxes, clip_on=False
+            ))
+            # Fill
+            ax.add_patch(plt.Rectangle(
+                (x, y), width * value, height,
+                facecolor=colour, edgecolor="none", alpha=0.9,
+                transform=ax.transAxes, clip_on=False
+            ))
+            ax.text(x, y + height + 0.025, label,
+                    transform=ax.transAxes, fontsize=8,
+                    color="#8b949e", va="bottom")
+            ax.text(x + width + 0.02, y + height / 2, f"{value:.1%}",
+                    transform=ax.transAxes, fontsize=9,
+                    color="#f0f6fc", va="center", fontweight="bold")
+ 
+        conf_colour = (ACCENT_BENIGN if mean_confidence > 0.80
+                       else ACCENT_WARN if mean_confidence > 0.60
+                       else ACCENT_ATTACK)
+        cons_colour = (ACCENT_BENIGN if consistency > 0.80
+                       else ACCENT_WARN if consistency > 0.60
+                       else ACCENT_ATTACK)
+ 
+        draw_gauge(ax3, 0.05, 0.78, mean_confidence,
+                   "Mean confidence", conf_colour)
+        draw_gauge(ax3, 0.05, 0.58, consistency,
+                   "Label consistency", cons_colour)
+ 
+        # Attack/benign verdict badge
+        verdict_colour = ACCENT_ATTACK if is_attack else ACCENT_BENIGN
+        verdict_text   = "ATTACK DETECTED" if is_attack else "BENIGN"
+        ax3.add_patch(plt.Rectangle(
+            (0.05, 0.38), 0.88, 0.12,
+            facecolor=verdict_colour, alpha=0.15,
+            edgecolor=verdict_colour, linewidth=1.2,
+            transform=ax3.transAxes, clip_on=False
+        ))
+        ax3.text(0.49, 0.44, verdict_text,
+                 transform=ax3.transAxes, fontsize=10,
+                 color=verdict_colour, fontweight="bold",
+                 ha="center", va="center")
+ 
+        # Summary stats block
+        stats = [
+            ("Windows collected",  str(n_rows)),
+            ("Unique fingerprints", str(unique_hashes)),
+            ("Dominant class",     dominant_label),
+            ("Attack windows",
+             str(int(dev_rows['is_attack'].sum()))),
+            ("Benign windows",
+             str(int((~dev_rows['is_attack']).sum()))),
+        ]
+        y_pos = 0.28
+        for stat_label, stat_val in stats:
+            ax3.text(0.05, y_pos, stat_label + ":",
+                     transform=ax3.transAxes, fontsize=7.5,
+                     color="#8b949e", va="top")
+            ax3.text(0.95, y_pos, stat_val,
+                     transform=ax3.transAxes, fontsize=7.5,
+                     color="#f0f6fc", va="top", ha="right",
+                     fontweight="bold")
+            y_pos -= 0.055
+ 
+        ax3.set_title("Fingerprint summary", fontsize=9,
+                       color="#8b949e", pad=6)
+ 
+    plt.savefig(output_path, dpi=150, bbox_inches="tight",
+                facecolor="#0d1117")
+    plt.close()
+    log(f"Device fingerprint plot saved to {output_path}")

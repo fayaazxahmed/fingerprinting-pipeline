@@ -8,6 +8,7 @@ from pipeline import (
     prepare_features,
     generate_fingerprints,
     summarize_by_device,
+    plot_device_fingerprints, 
     CSV_PATH,
     OUTPUT_PATH,
 )
@@ -53,14 +54,27 @@ def main():
     # 6. Per-device summary
     combined_df, summary_df = summarize_by_device(df_meta, fingerprint_df)
 
-    # 7. Save results
+    # 7. Plot device fingerprints
+    log("Generating device fingerprint plots...")
+    plot_device_fingerprints(
+        model          = model,
+        X              = X,
+        df_meta        = combined_df[[c for c in combined_df.columns
+                                    if c in ['src_ip', 'window_start',
+                                            'container_name']]],
+        fingerprint_df = fingerprint_df,
+        top_n_features = 15,
+        output_path    = "device_fingerprints.png"
+    )
+
+    # 8. Save results
     combined_df.to_csv(OUTPUT_PATH, index=False)
     log(f"Full results saved to {OUTPUT_PATH}")
 
     summary_df.to_csv("device_summary.csv", index=False)
     log("Device summary saved to device_summary.csv")
 
-    # 8. Final attack alert
+    # 9. Final attack alert
     attacked = summary_df[summary_df['attack_rows'] > 0]['device'].tolist()
     if attacked:
         log(f"ATTACKS DETECTED on: {attacked}")
@@ -68,7 +82,7 @@ def main():
         log("No attacks detected across all devices.")
 
     log("Pipeline complete.")
-    return combined_df, summary_df
+    return combined_df, summary_df, "device_fingerprints.png"
 
 if __name__ == "__main__":
     main()

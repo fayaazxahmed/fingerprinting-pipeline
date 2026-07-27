@@ -2,8 +2,8 @@
 .venv-1
 *.pkl
 *.ubj
+*.csv
 __pycache__
 Datasets
 docker_setup/Captures
 docker_setup/scripts
-captures
