@@ -23,7 +23,8 @@ FLUSH_TIMEOUT = 60.0              # Seconds to wait before giving up on a flush
 FLUSHES_PER_DEVICE = 1                # Optimal number of flushes to collect per device
 TOP_N_CLASSES = 3                 # Top N classes shown per fingerprint
 OUTPUT_PATH = "fingerprint_results.csv"
-HOSTILE_WINDOW_THRESHOLD = 0.30
+AGGREGATE_ATTACK_THRESHOLD = 0.50
+HOSTILE_WINDOW_THRESHOLD = 0.50
 
 # Columns to exclude from feature matrix, matching training-time drop_cols
 DROP_COLS = [
@@ -80,6 +81,7 @@ def generate_fingerprints(model, X, label_encoder, top_n=TOP_N_CLASSES):
     proba       = model.predict_proba(X)
     pred_idx    = np.argmax(proba, axis=1)
     pred_labels = label_encoder.inverse_transform(pred_idx)
+    pred_labels = apply_aggregate_threshold(proba, pred_labels, label_encoder)
  
     fingerprints = []
     for i, (probs, label) in enumerate(zip(proba, pred_labels)):
@@ -102,6 +104,45 @@ def generate_fingerprints(model, X, label_encoder, top_n=TOP_N_CLASSES):
         })
  
     return pd.DataFrame(fingerprints, index=X.index)
+
+def apply_aggregate_threshold(proba, pred_labels, le):
+    class_list  = list(le.classes_)
+
+    if 'benign' not in class_list:
+        log("WARNING: 'benign' class not found in label encoder — "
+            "aggregate threshold cannot be applied.")
+        return pred_labels
+
+    benign_idx   = class_list.index('benign')
+    overrides    = 0
+    pred_labels  = pred_labels.copy()
+
+    for i in range(len(pred_labels)):
+        if pred_labels[i].lower() != 'benign':
+            continue  # already classified as attack, no override needed
+
+        benign_prob  = proba[i][benign_idx]
+        attack_prob  = 1.0 - benign_prob   # combined probability of all non-benign classes
+
+        if attack_prob >= AGGREGATE_ATTACK_THRESHOLD:
+            # Reclassify as the highest-scoring individual attack class
+            attack_proba         = proba[i].copy()
+            attack_proba[benign_idx] = 0
+            top_attack_idx       = np.argmax(attack_proba)
+            prev_label           = pred_labels[i]
+            pred_labels[i]       = le.classes_[top_attack_idx]
+            overrides           += 1
+
+            log(f"  Aggregate override row {i}: {prev_label} → "
+                f"{pred_labels[i]} "
+                f"(benign: {benign_prob:.1%}, "
+                f"combined attack: {attack_prob:.1%})")
+
+    if overrides:
+        log(f"Aggregate threshold ({AGGREGATE_ATTACK_THRESHOLD:.0%}) "
+            f"triggered {overrides} override(s).")
+
+    return pred_labels
 
 # Feature Importance
 def feature_importance(model, top_n=20):

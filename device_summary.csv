@@ -1,7 +1,0 @@
-device,container_name,total_rows,attack_rows,benign_rows,attack_ratio,is_hostile,dominant_label,consistency,mean_confidence,unique_hashes
-192.168.10.11,unknown,177,35,142,0.1977,False,benign,0.8023,0.9031,11
-192.168.10.12,unknown,177,0,177,0.0,False,benign,1.0,0.9902,11
-192.168.10.20,unknown,176,140,36,0.7955,True,recon,0.7955,0.7635,8
-192.168.10.21,unknown,177,0,177,0.0,False,benign,1.0,0.3273,7
-192.168.10.22,unknown,177,0,177,0.0,False,benign,1.0,0.7528,2
-192.168.10.50,unknown,177,0,177,0.0,False,benign,1.0,0.993,41
