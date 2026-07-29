@@ -20,9 +20,10 @@ FEATURES_PATH = os.path.join(_MODEL_DIR, "feature_columns.pkl")
 DEVICE_COL = "src_ip"          # Column in extractor CSV that identifies devices
 POLL_INTERVAL = 1.0               # Seconds between file change checks
 FLUSH_TIMEOUT = 60.0              # Seconds to wait before giving up on a flush
-FLUSHES_PER_DEVICE = 5                # Optimal number of flushes to collect per device
+FLUSHES_PER_DEVICE = 1                # Optimal number of flushes to collect per device
 TOP_N_CLASSES = 3                 # Top N classes shown per fingerprint
 OUTPUT_PATH = "fingerprint_results.csv"
+HOSTILE_WINDOW_THRESHOLD = 0.30
 
 # Columns to exclude from feature matrix, matching training-time drop_cols
 DROP_COLS = [
@@ -339,6 +340,8 @@ def summarize_by_device(df_meta, fingerprint_df):
     for device, group in combined.groupby(DEVICE_COL):
         dominant_label = group['predicted_label'].mode()[0]
         consistency    = (group['predicted_label'] == dominant_label).mean()
+        attack_ratio = int(group['is_attack'].sum()) / len(group) if len(group) > 0 else 0
+        is_attack    = attack_ratio >= HOSTILE_WINDOW_THRESHOLD
 
         # Look up container name, fall back to IP if not found
         container_name = ip_to_name.get(device, 'unknown')
@@ -349,6 +352,8 @@ def summarize_by_device(df_meta, fingerprint_df):
             'total_rows':       len(group),
             'attack_rows':      int(group['is_attack'].sum()),
             'benign_rows':      int((~group['is_attack']).sum()),
+            'attack_ratio':    round(attack_ratio, 4),
+            'is_hostile':      is_attack,
             'dominant_label':   dominant_label,
             'consistency':      round(consistency, 4),
             'mean_confidence':  round(group['confidence'].mean(), 4),
@@ -359,10 +364,12 @@ def summarize_by_device(df_meta, fingerprint_df):
 
     log("\n── Per-Device Summary " + "─" * 40)
     for _, row in summary_df.iterrows():
-        flag = "ATTACK DETECTED" if row['attack_rows'] > 0 else "Benign"
+        attack_ratio = row['attack_rows'] / row['total_rows'] if row['total_rows'] > 0 else 0
+        flag = "ATTACK DETECTED" if attack_ratio >= HOSTILE_WINDOW_THRESHOLD else "Benign"
         log(
             f"  {str(row['container_name']):<25} ({str(row['device']):<15}) | "
             f"{flag:<18} | "
+            f"Attack ratio: {attack_ratio:.0%} | "
             f"Consistency: {row['consistency']:.0%} | "
             f"Confidence: {row['mean_confidence']:.4f} | "
             f"Unique hashes: {row['unique_hashes']}"
@@ -380,17 +387,16 @@ def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=1
     import numpy as np
  
     # ── Palette and style ─────────────────────────────────────────────────────
-    # Dark terminal-style theme reflecting network monitoring context
     plt.rcParams.update({
-        "figure.facecolor":  "#0d1117",
-        "axes.facecolor":    "#161b22",
-        "axes.edgecolor":    "#30363d",
-        "axes.labelcolor":   "#c9d1d9",
-        "axes.titlecolor":   "#f0f6fc",
-        "xtick.color":       "#8b949e",
-        "ytick.color":       "#8b949e",
-        "text.color":        "#c9d1d9",
-        "grid.color":        "#21262d",
+        "figure.facecolor":  "#ffffff",
+        "axes.facecolor":    "#ffffff",
+        "axes.edgecolor":    "#444444",
+        "axes.labelcolor":   "#000000",
+        "axes.titlecolor":   "#000000",
+        "xtick.color":       "#000000",
+        "ytick.color":       "#000000",
+        "text.color":        "#000000",
+        "grid.color":        "#d0d0d0",
         "grid.linestyle":    "--",
         "grid.alpha":        0.5,
         "font.family":       "monospace",
@@ -431,10 +437,10 @@ def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=1
     # Panel 1: feature value bar chart
     # Panel 2: class probability distribution
     # Panel 3: confidence + consistency gauges
-    fig = plt.figure(figsize=(22, 6 * n_devices), facecolor="#0d1117")
+    fig = plt.figure(figsize=(22, 6 * n_devices), facecolor="#e0e9f8")
     fig.suptitle(
         "Device Network Fingerprint Analysis",
-        fontsize=16, fontweight="bold", color="#f0f6fc",
+        fontsize=16, fontweight="bold", color="#000000",
         y=1.01 if n_devices > 1 else 1.04
     )
  
@@ -451,7 +457,9 @@ def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=1
         dominant_label  = dev_rows['predicted_label'].mode()[0]
         consistency     = (dev_rows['predicted_label'] == dominant_label).mean()
         mean_confidence = dev_rows['confidence'].mean()
-        is_attack       = dev_rows['is_attack'].any()
+        HOSTILE_WINDOW_THRESHOLD = 0.30
+        attack_ratio = dev_rows['is_attack'].sum() / len(dev_rows)
+        is_attack    = attack_ratio >= HOSTILE_WINDOW_THRESHOLD
         n_rows          = len(dev_rows)
         unique_hashes   = dev_rows['fingerprint_hash'].nunique()
  
@@ -521,7 +529,7 @@ def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=1
             ax1.text(
                 bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2,
                 f"{val:.2f}", va="center", ha="left",
-                fontsize=7, color="#8b949e"
+                fontsize=7, color="black"
             )
  
         ax1.set_yticks(range(len(ranked_features)))
@@ -539,7 +547,7 @@ def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=1
             ax1.text(
                 -0.02, i, f"#{rank}",
                 va="center", ha="right",
-                fontsize=7, color="#8b949e",
+                fontsize=7, color="#555555",
                 transform=ax1.get_yaxis_transform()
             )
  
@@ -598,7 +606,7 @@ def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=1
             ax2.text(
                 val + 0.005, i,
                 f"{val:.1%}", va="center", ha="left",
-                fontsize=8, color="#c9d1d9"
+                fontsize=8, color="black"
             )
  
         ax2.set_yticks(range(len(cls_labels)))
@@ -608,7 +616,7 @@ def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=1
         ax2.invert_yaxis()
         ax2.grid(axis="x")
         ax2.set_title("Class probability distribution", fontsize=9,
-                       color="#8b949e", pad=6)
+                       color="#555555", pad=6)
  
         # ── Panel 3: Confidence and consistency gauges ────────────────────────
         ax3 = fig.add_subplot(inner[2])
@@ -621,7 +629,7 @@ def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=1
             # Background track
             ax.add_patch(plt.Rectangle(
                 (x, y), width, height,
-                facecolor="#21262d", edgecolor="#30363d",
+                facecolor="#eeeeee", edgecolor="#bbbbbb",
                 linewidth=0.8, transform=ax.transAxes, clip_on=False
             ))
             # Fill
@@ -632,10 +640,10 @@ def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=1
             ))
             ax.text(x, y + height + 0.025, label,
                     transform=ax.transAxes, fontsize=8,
-                    color="#8b949e", va="bottom")
+                    color="#555555", va="bottom")
             ax.text(x + width + 0.02, y + height / 2, f"{value:.1%}",
                     transform=ax.transAxes, fontsize=9,
-                    color="#f0f6fc", va="center", fontweight="bold")
+                    color="#000000", va="center", fontweight="bold")
  
         conf_colour = (ACCENT_BENIGN if mean_confidence > 0.80
                        else ACCENT_WARN if mean_confidence > 0.60
@@ -677,17 +685,17 @@ def plot_device_fingerprints(model, X, df_meta, fingerprint_df, top_n_features=1
         for stat_label, stat_val in stats:
             ax3.text(0.05, y_pos, stat_label + ":",
                      transform=ax3.transAxes, fontsize=7.5,
-                     color="#8b949e", va="top")
+                     color="#555555", va="top")
             ax3.text(0.95, y_pos, stat_val,
                      transform=ax3.transAxes, fontsize=7.5,
-                     color="#f0f6fc", va="top", ha="right",
+                     color="#555555", va="top", ha="right",
                      fontweight="bold")
             y_pos -= 0.055
  
         ax3.set_title("Fingerprint summary", fontsize=9,
-                       color="#8b949e", pad=6)
+                       color="#555555", pad=6)
  
     plt.savefig(output_path, dpi=150, bbox_inches="tight",
-                facecolor="#0d1117")
+                facecolor="#ffffff")
     plt.close()
     log(f"Device fingerprint plot saved to {output_path}")

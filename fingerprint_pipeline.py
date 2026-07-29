@@ -75,7 +75,7 @@ def main():
     log("Device summary saved to device_summary.csv")
 
     # 9. Final attack alert
-    attacked = summary_df[summary_df['attack_rows'] > 0]['device'].tolist()
+    attacked = summary_df[summary_df['is_hostile'] == True]['device'].tolist()
     if attacked:
         log(f"ATTACKS DETECTED on: {attacked}")
     else:

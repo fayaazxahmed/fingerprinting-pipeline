@@ -3,6 +3,7 @@
 *.pkl
 *.ubj
 *.csv
+*.png
 __pycache__
 Datasets
 docker_setup/Captures
