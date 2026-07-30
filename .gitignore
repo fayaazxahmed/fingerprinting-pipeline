@@ -6,5 +6,5 @@
 /*.png
 __pycache__
 Datasets
-docker_setup/Captures
+docker_setup/capture/*.csv
 docker_setup/scripts
