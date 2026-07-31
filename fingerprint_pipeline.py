@@ -8,7 +8,8 @@ from pipeline import (
     prepare_features,
     generate_fingerprints,
     summarize_by_device,
-    plot_device_fingerprints, 
+    plot_device_fingerprints,
+    separate_device_identities,
     CSV_PATH,
     OUTPUT_PATH,
 )
@@ -31,11 +32,22 @@ def main():
     # 3. Collect traffic across optimal number of flushes
     df_collected = collect_traffic(CSV_PATH, file_state, n_devices)
 
+    # 3a. Separate devices sharing the same IP into sub-identities
+    log("Checking for multiple device identities per IP...")
+    df_collected, spoof_risk_devices = separate_device_identities(
+        df_collected, feature_columns, n_clusters=2, min_rows=5
+    )
+
+    # Check how many sub-identities were found
+    n_identities = df_collected['device_identity'].nunique()
+    log(f"Total device identities found: {n_identities} "
+        f"across {n_devices} IPs")
+
     # 4. Prepare features
     X, df_meta = prepare_features(df_collected, feature_columns)
-    log(f"Feature matrix ready — {X.shape[0]:,} rows × {X.shape[1]} features")
 
-    X, df_meta = prepare_features(df_collected, feature_columns)
+    # Add device_identity to df_meta for use in summarize_by_device
+    df_meta['device_identity'] = df_collected['device_identity'].values
 
     # Diagnostic — check how many features are actually populated
     zero_cols    = (X == 0).all()
@@ -81,6 +93,11 @@ def main():
     else:
         log("No attacks detected across all devices.")
 
+    if spoof_risk_devices:
+        log(f"DEVICES SUSPECTED OF IP SPOOFING: {sorted(spoof_risk_devices)}")
+    else:
+        log("No devices suspected of IP spoofing.")
+    
     log("Pipeline complete.")
     return combined_df, summary_df, "device_fingerprints.png"
 

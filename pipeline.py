@@ -20,7 +20,7 @@ FEATURES_PATH = os.path.join(_MODEL_DIR, "feature_columns.pkl")
 DEVICE_COL = "src_ip"          # Column in extractor CSV that identifies devices
 POLL_INTERVAL = 1.0               # Seconds between file change checks
 FLUSH_TIMEOUT = 60.0              # Seconds to wait before giving up on a flush
-FLUSHES_PER_DEVICE = 1                # Optimal number of flushes to collect per device
+FLUSHES_PER_DEVICE = 20                # Optimal number of flushes to collect per device
 TOP_N_CLASSES = 3                 # Top N classes shown per fingerprint
 OUTPUT_PATH = "fingerprint_results.csv"
 AGGREGATE_ATTACK_THRESHOLD = 0.50
@@ -133,10 +133,12 @@ def apply_aggregate_threshold(proba, pred_labels, le):
             pred_labels[i]       = le.classes_[top_attack_idx]
             overrides           += 1
 
+            '''
             log(f"  Aggregate override row {i}: {prev_label} → "
                 f"{pred_labels[i]} "
                 f"(benign: {benign_prob:.1%}, "
                 f"combined attack: {attack_prob:.1%})")
+            '''
 
     if overrides:
         log(f"Aggregate threshold ({AGGREGATE_ATTACK_THRESHOLD:.0%}) "
@@ -362,6 +364,86 @@ def prepare_features(df, feature_columns, drop_cols=None):
         log(f"WARNING: {len(missing)} feature(s) missing, filled with 0: {missing}")
  
     return df_features, df_meta
+
+def separate_device_identities(df_collected, feature_columns, n_clusters=2, min_rows=5):
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.metrics import silhouette_score
+
+    df = df_collected.copy()
+    df['device_identity'] = df['src_ip']  # default — one identity per IP
+
+    spoof_risk_devices = []
+
+    for ip, group in df.groupby('src_ip'):
+        if len(group) < min_rows:
+            log(f"  {ip} — too few rows for clustering ({len(group)}), "
+                f"keeping single identity")
+            continue
+
+        # Use only features available in the collected data
+        available_features = [f for f in feature_columns
+                               if f in group.columns]
+        X_group = group[available_features].apply(
+            pd.to_numeric, errors='coerce'
+        ).fillna(0)
+
+        # Normalise features so no single high-magnitude feature
+        # dominates the clustering
+        scaler  = StandardScaler()
+        X_scaled = scaler.fit_transform(X_group)
+
+        # Fit KMeans with n_clusters sub-identities
+        kmeans  = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        labels  = kmeans.fit_predict(X_scaled)
+
+        # Only split if clusters are meaningfully different
+        # measured by the ratio of inter-cluster to intra-cluster distance
+        inertia         = kmeans.inertia_
+        cluster_sizes   = pd.Series(labels).value_counts()
+        min_cluster_size = cluster_sizes.min()
+
+        if min_cluster_size < 3:
+            log(f"  {ip} — clusters too uneven "
+                f"(smallest: {min_cluster_size} rows), "
+                f"keeping single identity")
+            continue
+
+        # Measure whether clusters are actually separated
+        if len(set(labels)) > 1:
+            silhouette = silhouette_score(X_scaled, labels)
+        else:
+            silhouette = 0
+
+        centers = kmeans.cluster_centers_
+        centroid_distance = np.linalg.norm(centers[0] - centers[1])
+
+        within_cluster_distance = np.sqrt(
+            kmeans.inertia_ / len(X_scaled)
+        )
+
+        # Only flag spoofing if clusters are distinct enough
+        if silhouette < 0.60 or centroid_distance < 4.0 or centroid_distance / within_cluster_distance < 2.5:
+            log(
+                f"  {ip} — clusters insufficiently distinct "
+                f"(silhouette={silhouette:.2f}, "
+                f"centroid_distance={centroid_distance:.2f}, "
+                f"ratio={centroid_distance / within_cluster_distance:.2f})"
+            )
+            continue
+
+        spoof_risk_devices.append(ip)
+        
+        # Assign sub-identity labels
+        for cluster_id in range(n_clusters):
+            mask = group.index[labels == cluster_id]
+            df.loc[mask, 'device_identity'] = f"{ip}_{cluster_id}"
+
+        unique_identities = df[df['src_ip'] == ip]['device_identity'].unique()
+        log(f"  {ip} — split into {len(unique_identities)} "
+            f"sub-identities: {sorted(unique_identities)}")
+
+    return df, spoof_risk_devices
 
 def summarize_by_device(df_meta, fingerprint_df):
     combined = pd.concat(
