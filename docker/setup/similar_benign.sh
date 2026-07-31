@@ -1,5 +1,5 @@
 docker run -d \
-  --name similar-benign nginx\
+  --name similar-benign \
   --network iot-sim-net \
   --ip 192.168.10.30 \
   python:3.11-slim \
