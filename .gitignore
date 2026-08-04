@@ -8,3 +8,4 @@ __pycache__
 Datasets
 docker_setup/capture/*.csv
 docker_setup/scripts
+/graph_data
